@@ -237,6 +237,15 @@ const features = [
         detail: 'state_change connected → GET /private-chat/{id}/messages?since={lastId} → catch-up',
     },
     {
+        title: 'Online Status via Heartbeat',
+        badge: 'Presence',
+        badgeClass: 'bg-green-500/10 text-green-400',
+        icon: 'fa-solid fa-circle text-green-400',
+        iconBg: 'bg-green-500/10',
+        desc: 'Mengetahui siapa yang sedang aktif membuka halaman chat. Frontend mengirim ping tiap 30 detik. Server menyimpan status di Cache dengan TTL 70 detik. Jika user tutup tab, TTL habis dan status berubah jadi offline.',
+        detail: 'setInterval → POST /chat/heartbeat → Cache::put(ttl 70s)',
+    },
+    {
         title: 'Real-time Notification Badge',
         badge: 'Live',
         badgeClass: 'bg-red-500/10 text-red-400',
