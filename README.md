@@ -134,6 +134,8 @@ resources/js/
 - **Inertia.js** — SPA tanpa REST API
 - **Race Condition** — cara menghindarinya pada WebSocket
 
+> 💡 **Penjelasan lengkap** semua library (Reverb, Echo, pusher-js, concurrently) tersedia di **[CONCEPTS.md](./CONCEPTS.md)**
+
 ---
 
 ## 📄 Lisensi
