@@ -7,28 +7,24 @@ use App\Models\PrivateMessage;
 use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Inertia\Inertia;
 
 class PrivateChatController extends Controller
 {
     /**
-     * Daftar semua user selain diri sendiri + unread count per user.
+     * Daftar semua user selain diri sendiri + unread count + status online.
      */
     public function users()
     {
         $me = Auth::user();
 
         $users = User::where('id', '!=', $me->id)
-            ->withCount([
-                'receivedMessages as unread_count' => function ($query) use ($me) {
-                    $query->where('sender_id', $me->id)
-                          ->where('is_read', false);
-                },
-            ])
             ->get()
             ->map(fn ($u) => [
                 'id'           => $u->id,
                 'name'         => $u->name,
+                'is_online'    => Cache::has("user_online_{$u->id}"),
                 'unread_count' => PrivateMessage::where('sender_id', $u->id)
                                     ->where('receiver_id', $me->id)
                                     ->where('is_read', false)

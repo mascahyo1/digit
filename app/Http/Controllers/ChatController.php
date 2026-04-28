@@ -5,13 +5,14 @@ namespace App\Http\Controllers;
 use App\Events\MessageSent;
 use App\Models\Message;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Inertia\Inertia;
 
 class ChatController extends Controller
 {
     public function index()
     {
-        // Ambil 50 pesan terakhir, dibalik agar urutan dari lama ke baru
         $messages = Message::latest()->take(50)->get()->reverse()->values();
 
         return Inertia::render('Chat', [
@@ -21,23 +22,36 @@ class ChatController extends Controller
 
     public function send(Request $request)
     {
+        $user = Auth::user();
+
         $request->validate([
-            'sender'       => 'required|string|max:30',
-            'avatar_color' => 'required|string|max:20',
-            'body'         => 'required|string|max:1000',
+            'body' => 'required|string|max:1000',
         ]);
 
+        // Warna avatar deterministik berdasarkan user ID — konsisten tiap login
+        $colors       = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#f97316', '#6366f1'];
+        $avatarColor  = $colors[$user->id % count($colors)];
+
         $message = Message::create([
-            'sender'       => $request->sender,
-            'avatar_color' => $request->avatar_color,
+            'sender'       => $user->name,
+            'avatar_color' => $avatarColor,
             'body'         => $request->body,
         ]);
 
-        // Broadcast ke semua user yang subscribe channel 'chat'
         broadcast(new MessageSent($message))->toOthers();
 
-        return response()->json([
-            'message' => $message,
-        ]);
+        return response()->json(['message' => $message]);
+    }
+
+    /**
+     * Heartbeat — frontend ping setiap 30 detik saat halaman chat terbuka.
+     * Dipakai untuk menentukan apakah user sedang online.
+     * TTL 70 detik (sedikit lebih dari interval 30 detik + toleransi).
+     */
+    public function heartbeat(Request $request)
+    {
+        $userId = Auth::id();
+        Cache::put("user_online_{$userId}", true, now()->addSeconds(70));
+        return response()->json(['ok' => true]);
     }
 }

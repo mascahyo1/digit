@@ -566,3 +566,87 @@ Polling terus-menerus untuk chat justru boros dan tidak perlu:
 - Setiap user polling tiap 3 detik = banyak request mubazir ke DB
 - WebSocket sudah jalan normal → polling jadi sia-sia
 - DB adalah persistent store, tidak ada "race" seperti cache yang bisa expire
+
+---
+
+## 🟢 Online Status via Heartbeat — Siapa yang Sedang Aktif?
+
+### Konteks: Heartbeat di Chat vs Download
+
+Heartbeat di download dipakai untuk **mendeteksi crash server-side job**.
+
+Heartbeat di chat dipakai untuk hal yang berbeda: **mendeteksi apakah user masih membuka halaman** (client-side presence). Keduanya menggunakan mekanisme yang sama (cache TTL), tapi tujuannya berbeda.
+
+### Cara Kerja
+
+```
+User buka /chat atau /private-chat → frontend mulai kirim heartbeat setiap 30 detik
+  → POST /chat/heartbeat
+  → server: Cache::put("user_online_{id}", true, TTL 70 detik)
+
+User tutup tab / logout → heartbeat berhenti
+  → 70 detik berlalu → cache key expired → user dianggap offline
+```
+
+Kenapa TTL 70 detik untuk interval 30 detik? Memberi toleransi satu kali gagal ping (misal koneksi lambat sesaat), tanpa langsung dianggap offline.
+
+### Implementasi
+
+**Backend — `POST /chat/heartbeat`:**
+```php
+public function heartbeat(Request $request)
+{
+    Cache::put("user_online_{$userId}", true, now()->addSeconds(70));
+    return response()->json(['ok' => true]);
+}
+```
+
+**Backend — cek status saat load daftar user:**
+```php
+$users = User::where('id', '!=', $me->id)->get()->map(fn($u) => [
+    'id'        => $u->id,
+    'name'      => $u->name,
+    'is_online' => Cache::has("user_online_{$u->id}"),  // true/false
+    // ...
+]);
+```
+
+**Frontend — kirim heartbeat saat komponen aktif:**
+```js
+let heartbeatTimer = null;
+
+onMounted(() => {
+    sendHeartbeat();                              // langsung saat buka halaman
+    heartbeatTimer = setInterval(sendHeartbeat, 30_000);  // lanjut tiap 30 detik
+});
+
+onUnmounted(() => {
+    clearInterval(heartbeatTimer);  // berhenti saat user tutup halaman
+});
+
+function sendHeartbeat() {
+    axios.post(route('chat.heartbeat')).catch(() => {});
+}
+```
+
+**Frontend — tampilkan di UI:**
+```html
+<!-- Dot online/offline -->
+<span :class="user.is_online ? 'bg-green-400' : 'bg-gray-600'"></span>
+
+<!-- Teks status -->
+<p :class="user.is_online ? 'text-green-400' : 'text-gray-500'">
+    {{ user.is_online ? 'Online' : 'Offline' }}
+</p>
+```
+
+### Trade-off vs Presence Channel
+
+Alternatif yang lebih "proper" adalah **Presence Channel** dari Pusher/Reverb yang secara native tahu siapa yang sedang subscribe. Namun heartbeat cache memiliki keunggulan:
+
+- Lebih sederhana diimplementasi
+- Tidak terikat pada WebSocket (bekerja bahkan jika WS putus sesaat)
+- Bisa dipakai lintas halaman (bukan hanya di halaman chat tertentu)
+- Kontrol penuh atas logika kapan dianggap "online"
+
+Kekurangannya: ada delay maksimal 70 detik sebelum status berubah ke offline.

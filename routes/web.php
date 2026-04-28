@@ -34,6 +34,7 @@ Route::middleware('auth')->group(function () {
     // Public chat (tetap ada, sekarang perlu login)
     Route::get('/chat', [ChatController::class, 'index'])->name('chat');
     Route::post('/chat/send', [ChatController::class, 'send'])->name('chat.send');
+    Route::post('/chat/heartbeat', [ChatController::class, 'heartbeat'])->name('chat.heartbeat');
 
     // Private chat
     Route::get('/private-chat', [PrivateChatController::class, 'users'])->name('private-chat.users');

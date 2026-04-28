@@ -33,13 +33,21 @@
                             :style="{ backgroundColor: getColor(user.id) }">
                             {{ user.name.charAt(0).toUpperCase() }}
                         </div>
-                        <span class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-green-400 rounded-full border-2 border-gray-900"></span>
+                        <!-- Dot online/offline — berdasarkan heartbeat cache di server -->
+                        <span class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-gray-900 transition-colors"
+                            :class="user.is_online ? 'bg-green-400' : 'bg-gray-600'"
+                            :title="user.is_online ? 'Online' : 'Offline'"></span>
                     </div>
 
                     <!-- Info -->
                     <div class="flex-1 min-w-0">
                         <p class="text-white font-medium text-sm">{{ user.name }}</p>
-                        <p class="text-gray-500 text-xs">Klik untuk mulai chat</p>
+                        <p class="text-xs" :class="user.is_online ? 'text-green-400' : 'text-gray-500'">
+                            <span v-if="user.is_online">
+                                <i class="fa-solid fa-circle text-xs mr-0.5"></i>Online
+                            </span>
+                            <span v-else>Offline</span>
+                        </p>
                     </div>
 
                     <!-- Badge unread -->
