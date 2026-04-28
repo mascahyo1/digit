@@ -37,7 +37,18 @@ class HandleInertiaRequests extends Middleware
     {
         return [
             ...parent::share($request),
-            //
+            'auth' => [
+                'user' => $request->user() ? [
+                    'id'   => $request->user()->id,
+                    'name' => $request->user()->name,
+                ] : null,
+            ],
+            // Total pesan private yang belum dibaca (untuk badge notifikasi)
+            'unreadCount' => $request->user()
+                ? \App\Models\PrivateMessage::where('receiver_id', $request->user()->id)
+                    ->where('is_read', false)
+                    ->count()
+                : 0,
         ];
     }
 }

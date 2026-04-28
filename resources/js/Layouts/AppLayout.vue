@@ -10,13 +10,29 @@
                     </div>
                     <div>
                         <h1 class="text-white font-bold text-sm leading-tight">ReverbApp</h1>
-                        <p class="text-gray-500 text-xs">Real-time Download</p>
+                        <p class="text-gray-500 text-xs">Real-time Learning</p>
                     </div>
                 </div>
             </div>
 
+            <!-- User Info (jika sudah login) -->
+            <div v-if="authUser" class="px-4 py-3 border-b border-gray-800 flex items-center gap-3">
+                <div class="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
+                    :style="{ backgroundColor: userColor }">
+                    {{ authUser.name.charAt(0).toUpperCase() }}
+                </div>
+                <div class="flex-1 min-w-0">
+                    <p class="text-white text-xs font-semibold truncate">{{ authUser.name }}</p>
+                    <p class="text-gray-500 text-xs">Online</p>
+                </div>
+                <button @click="logout" title="Logout"
+                    class="text-gray-600 hover:text-red-400 transition-colors text-xs p-1 rounded-lg hover:bg-red-500/10">
+                    <i class="fa-solid fa-right-from-bracket"></i>
+                </button>
+            </div>
+
             <!-- Nav -->
-            <nav class="flex-1 px-3 py-4 space-y-1">
+            <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
                 <Link
                     :href="route('home')"
                     class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200"
@@ -33,14 +49,64 @@
                     <i class="fa-solid fa-download w-4 text-center"></i>
                     Download
                 </Link>
-                <Link
+
+                <!-- Divider auth-required -->
+                <div class="pt-2 pb-1">
+                    <p class="text-xs text-gray-700 font-medium uppercase tracking-wider px-3">
+                        <i class="fa-solid fa-lock mr-1 text-xs"></i>Perlu Login
+                    </p>
+                </div>
+
+                <!-- Public Chat -->
+                <Link v-if="authUser"
                     :href="route('chat')"
                     class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200"
-                    :class="$page.url.startsWith('/chat') ? 'bg-violet-600/20 text-violet-400 border border-violet-500/30' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
+                    :class="$page.url === '/chat' ? 'bg-blue-600/20 text-blue-400 border border-blue-500/30' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
                 >
                     <i class="fa-solid fa-comments w-4 text-center"></i>
-                    Web Chat
+                    Public Chat
                 </Link>
+                <Link v-else :href="route('login')"
+                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:text-gray-400 transition-colors">
+                    <i class="fa-solid fa-comments w-4 text-center"></i>
+                    Public Chat
+                    <span class="ml-auto text-xs bg-gray-800 text-gray-600 px-1.5 py-0.5 rounded">Login</span>
+                </Link>
+
+                <!-- Private Chat -->
+                <Link v-if="authUser"
+                    :href="route('private-chat.users')"
+                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200"
+                    :class="$page.url.startsWith('/private-chat') ? 'bg-violet-600/20 text-violet-400 border border-violet-500/30' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
+                >
+                    <i class="fa-solid fa-lock w-4 text-center"></i>
+                    Private Chat
+                    <!-- Notif badge unread count -->
+                    <span v-if="totalUnread > 0"
+                        class="ml-auto min-w-5 h-5 px-1.5 bg-red-500 text-white rounded-full text-xs font-bold flex items-center justify-center">
+                        {{ totalUnread > 99 ? '99+' : totalUnread }}
+                    </span>
+                </Link>
+                <Link v-else :href="route('login')"
+                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-600 hover:text-gray-400 transition-colors">
+                    <i class="fa-solid fa-lock w-4 text-center"></i>
+                    Private Chat
+                    <span class="ml-auto text-xs bg-gray-800 text-gray-600 px-1.5 py-0.5 rounded">Login</span>
+                </Link>
+
+                <!-- Login/Register link jika belum login -->
+                <div v-if="!authUser" class="pt-2 space-y-1">
+                    <Link :href="route('login')"
+                        class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-blue-400 hover:bg-blue-500/10 transition-colors border border-blue-500/20">
+                        <i class="fa-solid fa-right-to-bracket w-4 text-center"></i>
+                        Masuk
+                    </Link>
+                    <Link :href="route('register')"
+                        class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-gray-400 hover:bg-gray-800 hover:text-white transition-colors">
+                        <i class="fa-solid fa-user-plus w-4 text-center"></i>
+                        Daftar
+                    </Link>
+                </div>
             </nav>
 
             <!-- Tech Stack Badge -->
@@ -81,12 +147,55 @@
 </template>
 
 <script setup>
-import { Link } from '@inertiajs/vue3';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { Link, usePage, router } from '@inertiajs/vue3';
 
 defineProps({
-    title: {
-        type: String,
-        default: 'Dashboard',
-    },
+    title: { type: String, default: 'Dashboard' },
+});
+
+const page     = usePage();
+const authUser = computed(() => page.props.auth?.user ?? null);
+
+// Unread count — mulai dari shared prop, update via WebSocket
+const totalUnread = ref(page.props.unreadCount ?? 0);
+
+// Warna avatar deterministik berdasarkan user ID
+const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#06b6d4', '#f97316', '#6366f1'];
+const userColor = computed(() => authUser.value ? COLORS[authUser.value.id % COLORS.length] : '#6b7280');
+
+// Logout
+function logout() {
+    router.post(route('logout'));
+}
+
+// Subscribe ke private notification channel untuk real-time badge update
+let notifChannel = null;
+
+onMounted(() => {
+    if (authUser.value) {
+        notifChannel = window.Echo
+            .private(`notifications.${authUser.value.id}`)
+            .listen('.private.message.sent', () => {
+                // Jika tidak sedang di halaman private chat dengan pengirim tersebut, tambah badge
+                if (!page.url.startsWith('/private-chat/')) {
+                    totalUnread.value++;
+                }
+            });
+    }
+});
+
+onUnmounted(() => {
+    if (notifChannel && authUser.value) {
+        window.Echo.leave(`notifications.${authUser.value.id}`);
+    }
+});
+
+// Reset unread saat navigasi ke private chat
+router.on('navigate', () => {
+    if (page.url.startsWith('/private-chat/')) {
+        // Saat masuk ke private chat, update dari server via shared props
+        totalUnread.value = page.props.unreadCount ?? 0;
+    }
 });
 </script>

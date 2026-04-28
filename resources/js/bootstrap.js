@@ -16,4 +16,6 @@ window.Echo = new Echo({
     wssPort: import.meta.env.VITE_REVERB_PORT ?? 443,
     forceTLS: (import.meta.env.VITE_REVERB_SCHEME ?? 'http') === 'https',
     enabledTransports: ['ws', 'wss'],
+    // Wajib untuk private channel — kirim cookie session saat auth
+    authEndpoint: '/broadcasting/auth',
 });
