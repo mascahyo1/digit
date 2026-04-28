@@ -32,6 +32,23 @@
                     </div>
                 </div>
 
+                <!-- Online Users Bar -->
+                <div v-if="onlineUsers.length > 0" class="px-5 py-2.5 bg-gray-900/50 border-b border-gray-800 flex items-center gap-2 overflow-x-auto flex-shrink-0">
+                    <p class="text-xs text-gray-500 mr-2 flex-shrink-0">
+                        <i class="fa-solid fa-circle text-[8px] text-green-400 mr-1"></i>
+                        Online ({{ onlineUsers.length }}):
+                    </p>
+                    <div class="flex items-center gap-1.5">
+                        <div v-for="user in onlineUsers" :key="user.id" class="relative group cursor-default" :title="user.name">
+                            <div class="w-6 h-6 rounded-full flex items-center justify-center text-white text-[10px] font-bold"
+                                :style="{ backgroundColor: COLORS[user.id % COLORS.length] }">
+                                {{ user.name.charAt(0).toUpperCase() }}
+                            </div>
+                            <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-green-400 rounded-full border border-gray-900"></span>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Messages Area -->
                 <div ref="messagesContainer" class="flex-1 overflow-y-auto px-5 py-4 space-y-3 scroll-smooth">
 
@@ -47,9 +64,12 @@
                         class="flex items-end gap-2.5"
                         :class="msg.sender === authUser.name ? 'flex-row-reverse' : 'flex-row'">
 
-                        <div class="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0 mb-1"
-                            :style="{ backgroundColor: msg.avatar_color }">
-                            {{ msg.sender.charAt(0).toUpperCase() }}
+                        <div class="relative flex-shrink-0 mb-1">
+                            <div class="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold"
+                                :style="{ backgroundColor: msg.avatar_color }">
+                                {{ msg.sender.charAt(0).toUpperCase() }}
+                            </div>
+                            <span v-if="onlineUsers.some(u => u.name === msg.sender)" class="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-green-400 rounded-full border-2 border-gray-900" title="Online"></span>
                         </div>
 
                         <div class="max-w-xs lg:max-w-sm">
@@ -155,6 +175,7 @@ const messageInput      = ref('');
 const sending           = ref(false);
 const messagesContainer = ref(null);
 const someoneTyping     = ref(false);
+const onlineUsers       = ref([]);
 
 function scrollToBottom() {
     if (messagesContainer.value) {
@@ -198,7 +219,11 @@ async function sendMessage() {
 let heartbeatTimer = null;
 
 function sendHeartbeat() {
-    axios.post(route('chat.heartbeat')).catch(() => {});
+    axios.post(route('chat.heartbeat')).then(({ data }) => {
+        if (data.online_users) {
+            onlineUsers.value = data.online_users;
+        }
+    }).catch(() => {});
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────

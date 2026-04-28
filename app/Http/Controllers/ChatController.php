@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Events\MessageSent;
 use App\Models\Message;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
@@ -52,6 +53,19 @@ class ChatController extends Controller
     {
         $userId = Auth::id();
         Cache::put("user_online_{$userId}", true, now()->addSeconds(70));
-        return response()->json(['ok' => true]);
+
+        // Ambil daftar semua user yang sedang online
+        $onlineUsers = User::all()
+            ->filter(fn($u) => Cache::has("user_online_{$u->id}"))
+            ->map(fn($u) => [
+                'id' => $u->id,
+                'name' => $u->name
+            ])
+            ->values();
+
+        return response()->json([
+            'ok' => true,
+            'online_users' => $onlineUsers
+        ]);
     }
 }
