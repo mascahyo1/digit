@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\ChatController;
 use App\Http\Controllers\DownloadController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
@@ -18,3 +19,7 @@ Route::post('/download/dispatch', [DownloadController::class, 'dispatch'])->name
 
 // Serve file hasil generate
 Route::get('/download/file/{fileName}', [DownloadController::class, 'download'])->name('download.file');
+
+// Chat routes
+Route::get('/chat', [ChatController::class, 'index'])->name('chat');
+Route::post('/chat/send', [ChatController::class, 'send'])->name('chat.send');

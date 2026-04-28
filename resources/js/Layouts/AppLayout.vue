@@ -33,6 +33,14 @@
                     <i class="fa-solid fa-download w-4 text-center"></i>
                     Download
                 </Link>
+                <Link
+                    :href="route('chat')"
+                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200"
+                    :class="$page.url.startsWith('/chat') ? 'bg-violet-600/20 text-violet-400 border border-violet-500/30' : 'text-gray-400 hover:bg-gray-800 hover:text-white'"
+                >
+                    <i class="fa-solid fa-comments w-4 text-center"></i>
+                    Web Chat
+                </Link>
             </nav>
 
             <!-- Tech Stack Badge -->
