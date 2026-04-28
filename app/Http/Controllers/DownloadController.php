@@ -90,20 +90,37 @@ class DownloadController extends Controller
         }
 
         // Staleness check — hanya untuk status yang masih "berjalan"
-        $STALE_MINUTES = 5; // lebih dari 5 menit tanpa update = job dianggap mati
+        //
+        // PENTING: cek HEARTBEAT, bukan updated_at dari progress!
+        //
+        // Kenapa? Karena untuk dataset besar (1 triliun baris):
+        //   - Progress (%) mungkin tidak naik selama 30 menit (satu step = 10%)
+        //   - Tapi job masih jalan dan kirim heartbeat setiap N baris
+        //   - Jika cek updated_at progress → FALSE ALARM: dianggap crash padahal masih jalan
+        //   - Jika cek heartbeat → BENAR: heartbeat masih fresh = job masih hidup
+        //
+        $HEARTBEAT_STALE_MINUTES = 2; // heartbeat lebih agresif: 2 menit tanpa heartbeat = crash
 
         $isRunning = in_array($data['status'], ['processing', 'saving', 'connecting']);
 
         if ($isRunning) {
-            $lastUpdate = \Carbon\Carbon::parse($data['updated_at']);
-            $minutesSinceUpdate = $lastUpdate->diffInMinutes(now());
+            $heartbeat = Cache::get("download_heartbeat_{$downloadId}");
 
-            if ($minutesSinceUpdate >= $STALE_MINUTES) {
-                // Job tidak update cache lebih dari STALE_MINUTES menit
-                // → kemungkinan besar worker crash/OOM/killed tanpa memanggil failed()
-                $data['status']  = 'error';
-                $data['message'] = "Proses berhenti merespons ({$minutesSinceUpdate} menit tanpa update). "
-                    . 'Queue worker mungkin crash atau di-restart.';
+            if ($heartbeat) {
+                // Ada heartbeat — cek apakah masih fresh
+                $minutesSinceHeartbeat = \Carbon\Carbon::parse($heartbeat)->diffInMinutes(now());
+
+                if ($minutesSinceHeartbeat >= $HEARTBEAT_STALE_MINUTES) {
+                    // Heartbeat stale: job crash/killed tanpa memanggil failed()
+                    $data['status']  = 'error';
+                    $data['message'] = "Job berhenti merespons ({$minutesSinceHeartbeat} menit tanpa heartbeat). "
+                        . 'Worker mungkin crash, kehabisan memory, atau di-restart.';
+                }
+                // Else: heartbeat masih fresh → job masih hidup, meski % belum naik
+                // (kasus dataset sangat besar yang prosesnya lambat)
+            } else {
+                // Tidak ada heartbeat sama sekali → job mungkin belum dimulai
+                // atau sangat awal. Biarkan — progress akan kirim heartbeat segera.
             }
         }
 

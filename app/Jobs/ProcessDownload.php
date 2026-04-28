@@ -27,10 +27,16 @@ class ProcessDownload implements ShouldQueue
         $fileName = 'export_' . $this->downloadId . '.' . $this->fileType;
 
         $this->updateProgress(0, 'processing', 'Memulai proses generate file...');
+        $this->sendHeartbeat(); // heartbeat awal
         sleep(1);
 
         $content     = '';
         $rowsPerStep = (int) ceil($this->totalRows / $steps);
+
+        // Heartbeat dikirim setiap N baris — terlepas dari apakah % progress naik.
+        // Untuk dataset kecil: setiap 100 baris.
+        // Untuk dataset besar (1 triliun): naikkan ke 10_000 atau lebih.
+        $heartbeatEveryRows = max(1, (int) ($rowsPerStep / 10));
 
         if ($this->fileType === 'csv') {
             $content .= "ID,Nama,Email,Tanggal,Status\n";
@@ -41,8 +47,10 @@ class ProcessDownload implements ShouldQueue
         for ($step = 1; $step <= $steps; $step++) {
             $progress = (int) (($step / $steps) * 90);
 
+            // Progress update: hanya saat % naik (bisa jarang untuk dataset besar)
             $this->updateProgress($progress, 'processing', "Menggenerate data... ({$step}/{$steps} batch)");
 
+            $rowInStep = 0;
             for ($row = 1; $row <= $rowsPerStep; $row++) {
                 $id = (($step - 1) * $rowsPerStep) + $row;
                 if ($id > $this->totalRows) break;
@@ -51,6 +59,13 @@ class ProcessDownload implements ShouldQueue
                     $content .= "{$id},User {$id},user{$id}@example.com," . now()->subDays(rand(1, 365))->format('Y-m-d') . ",aktif\n";
                 } else {
                     $content .= "Record #{$id} | User {$id} | user{$id}@example.com | " . now()->format('Y-m-d') . "\n";
+                }
+
+                // Heartbeat: dikirim lebih sering dari progress
+                // Ini yang membedakan "lambat tapi jalan" vs "crash"
+                $rowInStep++;
+                if ($rowInStep % $heartbeatEveryRows === 0) {
+                    $this->sendHeartbeat();
                 }
             }
 
@@ -70,6 +85,29 @@ class ProcessDownload implements ShouldQueue
     public function failed(\Throwable $exception): void
     {
         $this->updateProgress(0, 'error', 'Terjadi kesalahan: ' . $exception->getMessage());
+        // Hapus heartbeat agar status endpoint tidak menganggap job masih hidup
+        Cache::forget("download_heartbeat_{$this->downloadId}");
+    }
+
+    /**
+     * Heartbeat — bukti job masih hidup, terpisah dari progress.
+     *
+     * KONSEP:
+     * - Progress update: jarang → hanya saat persentase naik
+     * - Heartbeat:       sering → setiap N baris, meski % belum naik
+     *
+     * Untuk dataset 1 triliun baris:
+     *   Step 1 (10%) mungkin butuh 30 menit.
+     *   Tanpa heartbeat → staleness check salah anggap crash setelah 5 menit.
+     *   Dengan heartbeat → staleness check tahu job masih hidup.
+     */
+    private function sendHeartbeat(): void
+    {
+        Cache::put(
+            "download_heartbeat_{$this->downloadId}",
+            now()->toIso8601String(),
+            now()->addHours(2)
+        );
     }
 
     /**
