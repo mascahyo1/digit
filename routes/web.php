@@ -26,6 +26,7 @@ Route::post('/logout', [AuthController::class, 'logout'])->name('logout')->middl
 Route::get('/download', [DownloadController::class, 'index'])->name('download');
 Route::post('/download/prepare', [DownloadController::class, 'prepare'])->name('download.prepare');
 Route::post('/download/dispatch', [DownloadController::class, 'dispatch'])->name('download.dispatch');
+Route::get('/download/status/{downloadId}', [DownloadController::class, 'status'])->name('download.status'); // polling fallback
 Route::get('/download/file/{fileName}', [DownloadController::class, 'download'])->name('download.file');
 
 // ── Chat & Private Chat (harus login) ────────────────────────────────────────

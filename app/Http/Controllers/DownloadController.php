@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Jobs\ProcessDownload;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
@@ -73,6 +74,21 @@ class DownloadController extends Controller
     /**
      * Serve file hasil generate.
      */
+    /**
+     * Polling fallback: kembalikan status terbaru dari cache.
+     * Dipanggil frontend saat WebSocket tidak menerima event > X detik.
+     */
+    public function status(string $downloadId)
+    {
+        $data = Cache::get("download_status_{$downloadId}");
+
+        if (! $data) {
+            return response()->json(['status' => 'not_found'], 404);
+        }
+
+        return response()->json($data);
+    }
+
     public function download(string $fileName)
     {
         $path = "downloads/{$fileName}";

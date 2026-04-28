@@ -124,27 +124,39 @@
                             Progress Real-time via Reverb
                         </h3>
 
-                        <!-- Status Badge -->
-                        <span class="px-2.5 py-0.5 rounded-full text-xs font-medium border"
-                            :class="{
-                                'bg-blue-500/10 text-blue-400 border-blue-500/20': currentDownload.status === 'processing',
-                                'bg-yellow-500/10 text-yellow-400 border-yellow-500/20': currentDownload.status === 'saving',
-                                'bg-green-500/10 text-green-400 border-green-500/20': currentDownload.status === 'completed',
-                                'bg-red-500/10 text-red-400 border-red-500/20': currentDownload.status === 'error',
-                            }">
-                            <span v-if="currentDownload.status === 'processing'">
-                                <i class="fa-solid fa-spinner fa-spin mr-1 text-xs"></i>Memproses
+                        <div class="flex items-center gap-2">
+                            <!-- Badge mode koneksi: WebSocket atau Polling fallback -->
+                            <span v-if="isDownloading" class="px-2 py-0.5 rounded-full text-xs font-medium border flex items-center gap-1"
+                                :class="connectionMode === 'websocket'
+                                    ? 'bg-green-500/10 text-green-400 border-green-500/20'
+                                    : 'bg-orange-500/10 text-orange-400 border-orange-500/20'">
+                                <span class="w-1.5 h-1.5 rounded-full animate-pulse"
+                                    :class="connectionMode === 'websocket' ? 'bg-green-400' : 'bg-orange-400'"></span>
+                                {{ connectionMode === 'websocket' ? 'WebSocket' : 'HTTP Polling' }}
                             </span>
-                            <span v-else-if="currentDownload.status === 'saving'">
-                                <i class="fa-solid fa-floppy-disk mr-1 text-xs"></i>Menyimpan
+
+                            <!-- Status Badge -->
+                            <span class="px-2.5 py-0.5 rounded-full text-xs font-medium border"
+                                :class="{
+                                    'bg-blue-500/10 text-blue-400 border-blue-500/20': currentDownload.status === 'processing' || currentDownload.status === 'connecting',
+                                    'bg-yellow-500/10 text-yellow-400 border-yellow-500/20': currentDownload.status === 'saving',
+                                    'bg-green-500/10 text-green-400 border-green-500/20': currentDownload.status === 'completed',
+                                    'bg-red-500/10 text-red-400 border-red-500/20': currentDownload.status === 'error',
+                                }">
+                                <span v-if="currentDownload.status === 'processing' || currentDownload.status === 'connecting'">
+                                    <i class="fa-solid fa-spinner fa-spin mr-1 text-xs"></i>Memproses
+                                </span>
+                                <span v-else-if="currentDownload.status === 'saving'">
+                                    <i class="fa-solid fa-floppy-disk mr-1 text-xs"></i>Menyimpan
+                                </span>
+                                <span v-else-if="currentDownload.status === 'completed'">
+                                    <i class="fa-solid fa-circle-check mr-1 text-xs"></i>Selesai
+                                </span>
+                                <span v-else>
+                                    <i class="fa-solid fa-circle-xmark mr-1 text-xs"></i>Error
+                                </span>
                             </span>
-                            <span v-else-if="currentDownload.status === 'completed'">
-                                <i class="fa-solid fa-circle-check mr-1 text-xs"></i>Selesai
-                            </span>
-                            <span v-else>
-                                <i class="fa-solid fa-circle-xmark mr-1 text-xs"></i>Error
-                            </span>
-                        </span>
+                        </div>
                     </div>
 
                     <!-- Progress Bar -->
@@ -244,28 +256,112 @@ const fileTypes = [
     { value: 'txt', label: 'TXT', icon: 'fa-solid fa-file-lines text-blue-400', desc: 'Plain text format' },
 ];
 
-const presets = [100, 500, 1000, 2000, 5000];
-
-const isDownloading = ref(false);
+const presets         = [100, 500, 1000, 2000, 5000];
+const isDownloading   = ref(false);
 const currentDownload = ref(null);
-const history = ref([]);
-let echoChannel = null;
+const history         = ref([]);
+const connectionMode  = ref('websocket'); // 'websocket' | 'polling' | 'reconnecting'
 
+let echoChannel    = null;
+let silenceTimer   = null; // timer deteksi "tidak ada event"
+let pollingTimer   = null; // interval HTTP polling
+
+// ── Konstanta ─────────────────────────────────────────────────────────────────
+const SILENCE_TIMEOUT_MS = 12_000; // 12 detik tanpa event → switch ke polling
+const POLLING_INTERVAL_MS = 3_000; // poll setiap 3 detik
+
+// ── Fungsi utama ──────────────────────────────────────────────────────────────
+
+function applyPayload(payload) {
+    currentDownload.value = {
+        ...currentDownload.value,
+        progress: payload.progress,
+        status:   payload.status,
+        message:  payload.message,
+        fileName: payload.file_name ?? payload.file_name ?? currentDownload.value?.fileName,
+    };
+
+    if (payload.status === 'completed' || payload.status === 'error') {
+        finishDownload(payload.status === 'completed');
+    }
+}
+
+function finishDownload(success = true) {
+    isDownloading.value = false;
+    stopSilenceTimer();
+    stopPolling();
+
+    if (success && echoChannel && currentDownload.value) {
+        history.value.unshift({ ...currentDownload.value });
+        window.Echo.leave(`download.${currentDownload.value.downloadId}`);
+        echoChannel = null;
+    }
+}
+
+// ── Silence timer: reset setiap kali event WebSocket masuk ───────────────────
+// Jika tidak ada event dalam SILENCE_TIMEOUT_MS, switch ke polling.
+
+function resetSilenceTimer(downloadId) {
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => {
+        if (!isDownloading.value) return;
+        // Hanya switch ke polling kalau belum polling
+        if (connectionMode.value === 'websocket') {
+            connectionMode.value = 'polling';
+            startPolling(downloadId);
+        }
+    }, SILENCE_TIMEOUT_MS);
+}
+
+function stopSilenceTimer() {
+    clearTimeout(silenceTimer);
+}
+
+// ── HTTP Polling fallback ─────────────────────────────────────────────────────
+function startPolling(downloadId) {
+    if (pollingTimer) return; // sudah berjalan
+
+    pollingTimer = setInterval(async () => {
+        try {
+            const { data } = await axios.get(`/download/status/${downloadId}`);
+            applyPayload(data);
+
+            // Kalau WebSocket tiba-tiba reconnect di tengah polling, hentikan polling
+            if (connectionMode.value === 'websocket') {
+                stopPolling();
+            }
+        } catch (err) {
+            // Status not found (belum dispatch atau sudah expired) — lanjut polling
+            if (err.response?.status !== 404) {
+                console.error('Polling error:', err);
+            }
+        }
+    }, POLLING_INTERVAL_MS);
+}
+
+function stopPolling() {
+    clearInterval(pollingTimer);
+    pollingTimer = null;
+}
+
+// ── Main: start download ──────────────────────────────────────────────────────
 async function startDownload() {
     if (isDownloading.value) return;
 
-    // Unsubscribe dari channel sebelumnya
+    // Cleanup download sebelumnya
     if (echoChannel && currentDownload.value) {
         window.Echo.leave(`download.${currentDownload.value.downloadId}`);
         echoChannel = null;
     }
+    stopSilenceTimer();
+    stopPolling();
 
-    isDownloading.value = true;
+    isDownloading.value  = true;
+    connectionMode.value = 'websocket';
     currentDownload.value = null;
 
     try {
-        // ── STEP 1: Minta download ID dari backend ──────────────────────────
-        // Backend hanya generate UUID + simpan metadata ke cache, belum dispatch job.
+        // STEP 1: Minta download ID
         const { data } = await axios.post('/download/prepare', {
             file_type: form.value.file_type,
             total_rows: form.value.total_rows,
@@ -283,54 +379,48 @@ async function startDownload() {
             fileType: form.value.file_type,
         };
 
-        // ── STEP 2: Subscribe ke channel Echo SEBELUM job di-dispatch ───────
-        // Ini kunci utama: listener aktif lebih dulu sehingga tidak ada event
-        // yang terlewat walau queue worker sangat cepat memproses job-nya.
-        await new Promise((resolve, reject) => {
+        // STEP 2: Subscribe Echo channel SEBELUM dispatch
+        await new Promise((resolve) => {
             echoChannel = window.Echo
                 .channel(`download.${downloadId}`)
                 .listen('.progress.updated', (payload) => {
-                    currentDownload.value = {
-                        ...currentDownload.value,
-                        progress: payload.progress,
-                        status:   payload.status,
-                        message:  payload.message,
-                        fileName: payload.file_name,
-                    };
-
-                    if (payload.status === 'completed') {
-                        isDownloading.value = false;
-                        history.value.unshift({ ...currentDownload.value });
-                        window.Echo.leave(`download.${downloadId}`);
-                        echoChannel = null;
+                    // Kalau sedang polling, kembali ke WebSocket mode
+                    if (connectionMode.value === 'polling') {
+                        connectionMode.value = 'websocket';
+                        stopPolling();
                     }
-
-                    if (payload.status === 'error') {
-                        isDownloading.value = false;
-                    }
+                    // Reset timer setiap kali event masuk
+                    resetSilenceTimer(downloadId);
+                    applyPayload(payload);
                 });
 
-            // Tunggu hingga Pusher/Echo benar-benar subscribe ke channel.
-            // Event 'pusher:subscription_succeeded' adalah konfirmasi dari Reverb
-            // bahwa WebSocket channel sudah aktif dan siap menerima event.
+            // Deteksi reconnect Pusher → kalau sebelumnya polling, switch kembali
+            window.Echo.connector.pusher.connection.bind('connected', () => {
+                if (connectionMode.value === 'polling' && isDownloading.value) {
+                    connectionMode.value = 'websocket';
+                    stopPolling();
+                    resetSilenceTimer(downloadId);
+                }
+            });
+
             echoChannel.pusher.channel(`download.${downloadId}`)
                 ?.bind('pusher:subscription_succeeded', () => resolve())
-                ?? resolve(); // fallback jika channel langsung ready
+                ?? resolve();
 
-            // Timeout 5 detik — jika WebSocket tidak connect, tetap lanjut dispatch
-            // agar user tidak stuck. Trade-off: ada risiko miss event awal.
             setTimeout(resolve, 5000);
         });
 
         currentDownload.value.message = 'Terhubung! Memulai proses generate file...';
         currentDownload.value.status  = 'processing';
 
-        // ── STEP 3: Baru dispatch job ke queue ──────────────────────────────
-        // Pada titik ini frontend SUDAH subscribe, jadi tidak ada event yang terlewat.
+        // STEP 3: Mulai silence timer, lalu dispatch job
+        resetSilenceTimer(downloadId);
         await axios.post('/download/dispatch', { download_id: downloadId });
 
     } catch (err) {
         isDownloading.value = false;
+        stopSilenceTimer();
+        stopPolling();
         if (currentDownload.value) {
             currentDownload.value.status  = 'error';
             currentDownload.value.message = 'Terjadi kesalahan: ' + (err.response?.data?.message ?? err.message);
@@ -343,6 +433,8 @@ onUnmounted(() => {
     if (echoChannel && currentDownload.value) {
         window.Echo.leave(`download.${currentDownload.value.downloadId}`);
     }
+    stopSilenceTimer();
+    stopPolling();
 });
 </script>
 
