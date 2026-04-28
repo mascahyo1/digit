@@ -359,3 +359,113 @@ Saat proses berjalan, ada badge kecil di pojok progress card:
 | Kompleksitas | Sederhana | Butuh endpoint + cache |
 
 > **Kesimpulan:** WebSocket untuk performa, polling untuk keandalan. Kombinasi keduanya menghasilkan sistem yang robust.
+
+---
+
+## 💓 Heartbeat — Membedakan "Crash" vs "Lambat tapi Masih Jalan"
+
+### Masalah: Staleness Check yang Naif
+
+Bayangkan job memproses 1 triliun baris. Satu step (10%) butuh 30 menit karena datanya besar.
+
+Kalau staleness check berbasis `updated_at` dari progress:
+
+```
+t=0m   progress 0%,  updated_at = sekarang
+t=5m   status endpoint dipanggil polling
+        → "5 menit tanpa update → ERROR!"  ← FALSE ALARM!
+        padahal job masih jalan, cuma lagi sibuk proses baris ke-500 juta
+```
+
+### Solusi: Dua Cache Key dengan Frekuensi Berbeda
+
+```
+download_status_{id}      → progress %
+  Update: JARANG — hanya saat persentase naik
+  Misal: update tiap 10% = tiap 30 menit untuk dataset besar
+
+download_heartbeat_{id}   → "saya masih hidup"
+  Update: SERING — tiap N baris di dalam loop, terlepas dari %
+  Misal: update tiap 100.000 baris = tiap beberapa detik
+```
+
+### Implementasi
+
+**Job — dua metode yang berbeda tujuan:**
+
+```php
+// Progress: hanya saat % milestone tercapai
+private function updateProgress(int $progress, string $status, string $message): void
+{
+    Cache::put("download_status_{$id}", [
+        'progress' => $progress,
+        'status'   => $status,
+        // ...
+    ]);
+    event(new DownloadProgress(...)); // broadcast ke WebSocket
+}
+
+// Heartbeat: bukti masih hidup, tidak broadcast ke WebSocket
+private function sendHeartbeat(): void
+{
+    Cache::put("download_heartbeat_{$id}", now()->toIso8601String(), now()->addHours(2));
+}
+```
+
+**Dalam loop pemrosesan baris:**
+
+```php
+$heartbeatEveryRows = max(1, (int) ($rowsPerStep / 10)); // lebih granular dari progress
+
+for ($step = 1; $step <= $steps; $step++) {
+    $this->updateProgress($progress, 'processing', "Step {$step}...");  // per step
+
+    $rowInStep = 0;
+    foreach ($rows as $row) {
+        // ... proses baris ...
+
+        // Heartbeat lebih granular dari progress
+        if (++$rowInStep % $heartbeatEveryRows === 0) {
+            $this->sendHeartbeat();
+        }
+    }
+}
+```
+
+**Controller — staleness check pakai heartbeat:**
+
+```php
+$heartbeat = Cache::get("download_heartbeat_{$downloadId}");
+
+if ($heartbeat) {
+    $minutesSince = Carbon::parse($heartbeat)->diffInMinutes(now());
+
+    if ($minutesSince >= 2) {
+        // Heartbeat stale → benar-benar crash
+        $data['status']  = 'error';
+        $data['message'] = "Job crash ({$minutesSince} menit tanpa heartbeat)";
+    }
+    // Else: heartbeat fresh → job masih hidup meski % belum naik
+}
+```
+
+### Perbandingan Skenario
+
+```
+Dataset 1 triliun baris, step 1 butuh 30 menit:
+
+t=0m   progress 0%, heartbeat fresh
+t=2m   belum naik %, TAPI heartbeat diperbarui tiap 100k baris
+t=5m   staleness check: heartbeat 3 menit lalu → MASIH HIDUP ✅
+t=30m  progress naik ke 10%
+
+Jika worker crash di t=5m:
+t=5m   heartbeat berhenti diperbarui
+t=7m   staleness check: heartbeat 2 menit lalu → CRASH! ✅ terdeteksi
+```
+
+### Aturan Umum Memilih Interval Heartbeat
+
+- **Threshold stale**: 2× interval heartbeat + buffer. Contoh: heartbeat tiap 30 detik → stale setelah 2 menit.
+- **Interval heartbeat**: sesuaikan dengan beban proses. Jangan terlalu sering (overhead cache), jangan terlalu jarang (deteksi lambat).
+- **Produksi besar**: heartbeat tiap 10.000–100.000 baris. Stale setelah 2–5 menit.

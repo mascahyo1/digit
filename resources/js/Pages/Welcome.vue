@@ -210,13 +210,13 @@ const features = [
         detail: 'POST /prepare → subscribe Echo → konfirmasi → POST /dispatch',
     },
     {
-        title: 'WebSocket Fallback ke HTTP Polling',
+        title: 'WebSocket Fallback + Heartbeat',
         badge: 'Resilient',
         badgeClass: 'bg-orange-500/10 text-orange-400',
         icon: 'fa-solid fa-rotate text-orange-400',
         iconBg: 'bg-orange-500/10',
-        desc: 'Jika WebSocket tidak mengirim event > 12 detik, frontend otomatis beralih ke HTTP polling setiap 3 detik. Progress tidak pernah stuck. Balik ke WebSocket saat reconnect.',
-        detail: 'Silence 12s → poll /download/status/{id} dari cache → reconnect → stop polling',
+        desc: 'Disconnect → polling aktif via Pusher state_change event. Job crash tanpa exception → deteksi via heartbeat (bukan progress %). Heartbeat update tiap N baris sehingga job lambat tidak salah dianggap crash.',
+        detail: 'download_status_{id} (jarang) + download_heartbeat_{id} (sering) → 2 cache key terpisah',
     },
     {
         title: 'Private Chat + Authentication',
