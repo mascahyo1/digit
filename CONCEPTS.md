@@ -469,3 +469,100 @@ t=7m   staleness check: heartbeat 2 menit lalu → CRASH! ✅ terdeteksi
 - **Threshold stale**: 2× interval heartbeat + buffer. Contoh: heartbeat tiap 30 detik → stale setelah 2 menit.
 - **Interval heartbeat**: sesuaikan dengan beban proses. Jangan terlalu sering (overhead cache), jangan terlalu jarang (deteksi lambat).
 - **Produksi besar**: heartbeat tiap 10.000–100.000 baris. Stale setelah 2–5 menit.
+
+---
+
+## 🔁 Chat Reconnect Catch-up — Tidak Ada Pesan yang Terlewat
+
+### Apakah Chat Perlu Heartbeat?
+
+**Tidak.** Heartbeat ada karena ada background job yang berjalan sendiri dan bisa crash diam-diam. Chat tidak punya background job — server hanya menunggu pesan dari user, lalu broadcast. Tidak ada proses yang bisa "mati tanpa diketahui".
+
+### Apakah Chat Perlu Polling Fallback?
+
+**Tidak perlu terus-menerus.** Berbeda dengan download yang progressnya terus berubah, pesan chat tersimpan permanen di **database**. Saat WebSocket putus lalu reconnect, cukup satu HTTP request untuk mengambil semua yang terlewat.
+
+### Strategi: Catch-up on Reconnect
+
+```
+Download:  polling terus tiap 3 detik (karena progress terus berubah di cache)
+Chat:      satu request saat reconnect saja (karena pesan ada di DB, tidak hilang)
+```
+
+### Implementasi
+
+**Backend — endpoint `GET /private-chat/{user}/messages?since={lastId}`:**
+
+```php
+public function messagesSince(Request $request, User $user)
+{
+    $since = (int) $request->query('since', 0);
+
+    // Ambil semua pesan antara dua user dengan id > since
+    $messages = PrivateMessage::with(['sender:id,name'])
+        ->where(fn($q) => $q->where('sender_id', $me->id)->where('receiver_id', $user->id))
+        ->orWhere(fn($q) => $q->where('sender_id', $user->id)->where('receiver_id', $me->id))
+        ->where('id', '>', $since)
+        ->oldest()
+        ->get();
+
+    return response()->json(['messages' => $messages]);
+}
+```
+
+**Frontend — `Chat.vue` (Pusher state_change listener):**
+
+```js
+// Track ID pesan terakhir yang diketahui
+const lastMessageId = computed(() => Math.max(...messages.value.map(m => m.id)));
+
+window.Echo.connector.pusher.connection.bind('state_change', async ({ previous, current }) => {
+    if (current === 'connected') {
+        wsState.value = 'connected';
+
+        // Reconnect setelah disconnect → fetch pesan yang terlewat
+        if (previous === 'connecting' || previous === 'disconnected') {
+            const { data } = await axios.get(
+                `/private-chat/${chatWith.id}/messages?since=${lastMessageId.value}`
+            );
+            // Tambahkan pesan baru, hindari duplikat
+            const existingIds = new Set(messages.value.map(m => m.id));
+            const newMsgs = data.messages.filter(m => !existingIds.has(m.id));
+            messages.value.push(...newMsgs.map(m => ({ ...m, _missed: true })));
+        }
+    } else if (current === 'connecting') {
+        wsState.value = 'connecting';  // tampil banner "Reconnecting..."
+    } else {
+        wsState.value = 'disconnected';
+    }
+});
+```
+
+### Alur Saat Koneksi Terputus
+
+```
+t=0m   User A dan B chat normal via WebSocket
+t=1m   ⚠️ Koneksi User A putus (Reverb restart / internet flicker)
+        → banner kuning "WebSocket terputus" muncul di UI User A
+        → indikator avatar berubah warna
+
+t=1-3m User B kirim 3 pesan → tidak sampai ke User A (WS putus)
+        → pesan tersimpan di DB oleh server ✅
+
+t=3m   WebSocket User A reconnect (Pusher auto-reconnect)
+        → state_change: 'connecting' → 'connected'
+        → GET /private-chat/B/messages?since=142
+        → server kembalikan 3 pesan yang terlewat ✅
+        → pesan muncul dengan tanda 📶⃠ (wifi-slash) di UI
+
+t=3m+  Banner kuning hilang, chat kembali normal
+```
+
+### Mengapa Tidak Polling Terus seperti Download?
+
+Karena **database adalah source of truth yang permanen**. Pesan tidak bisa hilang dari DB. Jadi tidak perlu cek terus-menerus — cukup tanya "ada yang baru?" sekali saat koneksi pulih.
+
+Polling terus-menerus untuk chat justru boros dan tidak perlu:
+- Setiap user polling tiap 3 detik = banyak request mubazir ke DB
+- WebSocket sudah jalan normal → polling jadi sia-sia
+- DB adalah persistent store, tidak ada "race" seperti cache yang bisa expire

@@ -39,4 +39,5 @@ Route::middleware('auth')->group(function () {
     Route::get('/private-chat', [PrivateChatController::class, 'users'])->name('private-chat.users');
     Route::get('/private-chat/{user}', [PrivateChatController::class, 'show'])->name('private-chat.show');
     Route::post('/private-chat/{user}/send', [PrivateChatController::class, 'send'])->name('private-chat.send');
+    Route::get('/private-chat/{user}/messages', [PrivateChatController::class, 'messagesSince'])->name('private-chat.messages-since');
 });

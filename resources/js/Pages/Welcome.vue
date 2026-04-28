@@ -228,6 +228,15 @@ const features = [
         detail: 'Echo.private("chat.{a}-{b}") → /broadcasting/auth → channel authorized',
     },
     {
+        title: 'Chat Reconnect Catch-up',
+        badge: 'Chat',
+        badgeClass: 'bg-teal-500/10 text-teal-400',
+        icon: 'fa-solid fa-arrows-rotate text-teal-400',
+        iconBg: 'bg-teal-500/10',
+        desc: 'Saat WebSocket disconnect, banner peringatan muncul. Saat reconnect, satu request GET ?since={lastId} ke database mengambil semua pesan yang terlewat. Pesan missed ditandai ikon wifi-slash.',
+        detail: 'state_change connected → GET /private-chat/{id}/messages?since={lastId} → catch-up',
+    },
+    {
         title: 'Real-time Notification Badge',
         badge: 'Live',
         badgeClass: 'bg-red-500/10 text-red-400',

@@ -99,4 +99,39 @@ class PrivateChatController extends Controller
 
         return response()->json(['message' => $message]);
     }
+
+    /**
+     * Catch-up: ambil pesan yang terlewat sejak lastId tertentu.
+     *
+     * Dipanggil frontend saat WebSocket reconnect setelah disconnect.
+     * Bukan polling terus-menerus — hanya satu request sekali saat reconnect.
+     *
+     * Contoh: GET /private-chat/3/messages?since=142
+     *   → kembalikan pesan antara auth user & user 3 dengan id > 142
+     */
+    public function messagesSince(Request $request, User $user)
+    {
+        $me     = Auth::user();
+        $since  = (int) $request->query('since', 0);
+
+        $messages = PrivateMessage::with(['sender:id,name'])
+            ->where(function ($q) use ($me, $user) {
+                $q->where('sender_id', $me->id)->where('receiver_id', $user->id);
+            })
+            ->orWhere(function ($q) use ($me, $user) {
+                $q->where('sender_id', $user->id)->where('receiver_id', $me->id);
+            })
+            ->where('id', '>', $since)
+            ->oldest()
+            ->get();
+
+        // Tandai pesan dari lawan sebagai sudah dibaca
+        PrivateMessage::where('sender_id', $user->id)
+            ->where('receiver_id', $me->id)
+            ->where('id', '>', $since)
+            ->where('is_read', false)
+            ->update(['is_read' => true]);
+
+        return response()->json(['messages' => $messages]);
+    }
 }
