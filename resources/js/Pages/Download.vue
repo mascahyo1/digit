@@ -260,25 +260,21 @@ const presets         = [100, 500, 1000, 2000, 5000];
 const isDownloading   = ref(false);
 const currentDownload = ref(null);
 const history         = ref([]);
-const connectionMode  = ref('websocket'); // 'websocket' | 'polling' | 'reconnecting'
+const connectionMode  = ref('websocket'); // 'websocket' | 'polling'
 
-let echoChannel    = null;
-let silenceTimer   = null; // timer deteksi "tidak ada event"
-let pollingTimer   = null; // interval HTTP polling
+let echoChannel  = null;
+let pollingTimer = null; // interval HTTP polling
 
-// ── Konstanta ─────────────────────────────────────────────────────────────────
-const SILENCE_TIMEOUT_MS = 12_000; // 12 detik tanpa event → switch ke polling
 const POLLING_INTERVAL_MS = 3_000; // poll setiap 3 detik
 
-// ── Fungsi utama ──────────────────────────────────────────────────────────────
-
+// ── Terapkan payload ke UI ────────────────────────────────────────────────────
 function applyPayload(payload) {
     currentDownload.value = {
         ...currentDownload.value,
         progress: payload.progress,
         status:   payload.status,
         message:  payload.message,
-        fileName: payload.file_name ?? payload.file_name ?? currentDownload.value?.fileName,
+        fileName: payload.file_name ?? currentDownload.value?.fileName,
     };
 
     if (payload.status === 'completed' || payload.status === 'error') {
@@ -288,7 +284,6 @@ function applyPayload(payload) {
 
 function finishDownload(success = true) {
     isDownloading.value = false;
-    stopSilenceTimer();
     stopPolling();
 
     if (success && echoChannel && currentDownload.value) {
@@ -296,25 +291,6 @@ function finishDownload(success = true) {
         window.Echo.leave(`download.${currentDownload.value.downloadId}`);
         echoChannel = null;
     }
-}
-
-// ── Silence timer: reset setiap kali event WebSocket masuk ───────────────────
-// Jika tidak ada event dalam SILENCE_TIMEOUT_MS, switch ke polling.
-
-function resetSilenceTimer(downloadId) {
-    clearTimeout(silenceTimer);
-    silenceTimer = setTimeout(() => {
-        if (!isDownloading.value) return;
-        // Hanya switch ke polling kalau belum polling
-        if (connectionMode.value === 'websocket') {
-            connectionMode.value = 'polling';
-            startPolling(downloadId);
-        }
-    }, SILENCE_TIMEOUT_MS);
-}
-
-function stopSilenceTimer() {
-    clearTimeout(silenceTimer);
 }
 
 // ── HTTP Polling fallback ─────────────────────────────────────────────────────
@@ -325,13 +301,7 @@ function startPolling(downloadId) {
         try {
             const { data } = await axios.get(`/download/status/${downloadId}`);
             applyPayload(data);
-
-            // Kalau WebSocket tiba-tiba reconnect di tengah polling, hentikan polling
-            if (connectionMode.value === 'websocket') {
-                stopPolling();
-            }
         } catch (err) {
-            // Status not found (belum dispatch atau sudah expired) — lanjut polling
             if (err.response?.status !== 404) {
                 console.error('Polling error:', err);
             }
@@ -348,12 +318,10 @@ function stopPolling() {
 async function startDownload() {
     if (isDownloading.value) return;
 
-    // Cleanup download sebelumnya
     if (echoChannel && currentDownload.value) {
         window.Echo.leave(`download.${currentDownload.value.downloadId}`);
         echoChannel = null;
     }
-    stopSilenceTimer();
     stopPolling();
 
     isDownloading.value  = true;
@@ -372,11 +340,11 @@ async function startDownload() {
         currentDownload.value = {
             downloadId,
             progress: 0,
-            status: 'connecting',
-            message: 'Menghubungkan ke Reverb WebSocket...',
+            status:   'connecting',
+            message:  'Menghubungkan ke Reverb WebSocket...',
             fileName: null,
             totalRows: form.value.total_rows,
-            fileType: form.value.file_type,
+            fileType:  form.value.file_type,
         };
 
         // STEP 2: Subscribe Echo channel SEBELUM dispatch
@@ -384,22 +352,37 @@ async function startDownload() {
             echoChannel = window.Echo
                 .channel(`download.${downloadId}`)
                 .listen('.progress.updated', (payload) => {
-                    // Kalau sedang polling, kembali ke WebSocket mode
+                    applyPayload(payload);
+                });
+
+            // ── Deteksi perubahan state koneksi WebSocket secara langsung ──────
+            // Lebih akurat dari silence timer: polling aktif TEPAT saat disconnect,
+            // bukan nunggu timeout arbitrer.
+            //
+            // State Pusher: initialized → connecting → connected
+            //                                              ↓ (putus)
+            //                                        disconnected → connecting → connected
+            //
+            // disconnected : koneksi putus, Pusher akan coba reconnect otomatis
+            // unavailable  : sudah coba beberapa kali, tidak berhasil
+            // failed       : browser tidak support WebSocket sama sekali
+            window.Echo.connector.pusher.connection.bind('state_change', ({ current }) => {
+                if (!isDownloading.value) return;
+
+                if (current === 'disconnected' || current === 'unavailable' || current === 'failed') {
+                    // WebSocket benar-benar putus → langsung switch ke polling
+                    if (connectionMode.value === 'websocket') {
+                        connectionMode.value = 'polling';
+                        startPolling(downloadId);
+                    }
+                }
+
+                if (current === 'connected') {
+                    // WebSocket reconnect berhasil → stop polling, kembali ke WebSocket
                     if (connectionMode.value === 'polling') {
                         connectionMode.value = 'websocket';
                         stopPolling();
                     }
-                    // Reset timer setiap kali event masuk
-                    resetSilenceTimer(downloadId);
-                    applyPayload(payload);
-                });
-
-            // Deteksi reconnect Pusher → kalau sebelumnya polling, switch kembali
-            window.Echo.connector.pusher.connection.bind('connected', () => {
-                if (connectionMode.value === 'polling' && isDownloading.value) {
-                    connectionMode.value = 'websocket';
-                    stopPolling();
-                    resetSilenceTimer(downloadId);
                 }
             });
 
@@ -407,19 +390,17 @@ async function startDownload() {
                 ?.bind('pusher:subscription_succeeded', () => resolve())
                 ?? resolve();
 
-            setTimeout(resolve, 5000);
+            setTimeout(resolve, 5000); // fallback jika event subscription tidak datang
         });
 
         currentDownload.value.message = 'Terhubung! Memulai proses generate file...';
         currentDownload.value.status  = 'processing';
 
-        // STEP 3: Mulai silence timer, lalu dispatch job
-        resetSilenceTimer(downloadId);
+        // STEP 3: Dispatch job
         await axios.post('/download/dispatch', { download_id: downloadId });
 
     } catch (err) {
         isDownloading.value = false;
-        stopSilenceTimer();
         stopPolling();
         if (currentDownload.value) {
             currentDownload.value.status  = 'error';
@@ -433,9 +414,9 @@ onUnmounted(() => {
     if (echoChannel && currentDownload.value) {
         window.Echo.leave(`download.${currentDownload.value.downloadId}`);
     }
-    stopSilenceTimer();
     stopPolling();
 });
+
 </script>
 
 <style scoped>
