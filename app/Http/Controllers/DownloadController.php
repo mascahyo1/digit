@@ -72,11 +72,14 @@ class DownloadController extends Controller
     }
 
     /**
-     * Serve file hasil generate.
-     */
-    /**
      * Polling fallback: kembalikan status terbaru dari cache.
-     * Dipanggil frontend saat WebSocket tidak menerima event > X detik.
+     * Dipanggil frontend saat WebSocket tidak menerima event.
+     *
+     * Skenario error yang ditangani:
+     * 1. Exception PHP di job       → failed() dipanggil Laravel → cache di-update ke 'error'
+     * 2. Queue worker crash/di-kill → failed() TIDAK dipanggil   → cache tidak di-update
+     *    → ditangani di sini via staleness check: jika tidak ada update > STALE_MINUTES,
+     *      paksa status menjadi 'error' agar frontend tidak stuck selamanya.
      */
     public function status(string $downloadId)
     {
@@ -84,6 +87,24 @@ class DownloadController extends Controller
 
         if (! $data) {
             return response()->json(['status' => 'not_found'], 404);
+        }
+
+        // Staleness check — hanya untuk status yang masih "berjalan"
+        $STALE_MINUTES = 5; // lebih dari 5 menit tanpa update = job dianggap mati
+
+        $isRunning = in_array($data['status'], ['processing', 'saving', 'connecting']);
+
+        if ($isRunning) {
+            $lastUpdate = \Carbon\Carbon::parse($data['updated_at']);
+            $minutesSinceUpdate = $lastUpdate->diffInMinutes(now());
+
+            if ($minutesSinceUpdate >= $STALE_MINUTES) {
+                // Job tidak update cache lebih dari STALE_MINUTES menit
+                // → kemungkinan besar worker crash/OOM/killed tanpa memanggil failed()
+                $data['status']  = 'error';
+                $data['message'] = "Proses berhenti merespons ({$minutesSinceUpdate} menit tanpa update). "
+                    . 'Queue worker mungkin crash atau di-restart.';
+            }
         }
 
         return response()->json($data);
