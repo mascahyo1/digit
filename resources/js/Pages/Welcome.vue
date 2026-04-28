@@ -105,6 +105,44 @@
                     </span>
                 </div>
             </div>
+
+            <!-- Fitur Unggulan -->
+            <div class="mt-6">
+                <h2 class="text-white font-semibold mb-4 flex items-center gap-2">
+                    <i class="fa-solid fa-star text-yellow-400"></i>
+                    Fitur & Konsep yang Dipelajari
+                </h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div v-for="feat in features" :key="feat.title"
+                        class="bg-gray-900 border border-gray-800 rounded-xl p-5 hover:border-gray-700 transition-all duration-200 hover:-translate-y-0.5">
+                        <div class="flex items-start gap-3">
+                            <div class="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
+                                :class="feat.iconBg">
+                                <i :class="feat.icon + ' text-sm'"></i>
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2 mb-1">
+                                    <p class="text-white text-sm font-semibold">{{ feat.title }}</p>
+                                    <span v-if="feat.badge" class="text-xs px-1.5 py-0.5 rounded font-medium"
+                                        :class="feat.badgeClass">
+                                        {{ feat.badge }}
+                                    </span>
+                                </div>
+                                <p class="text-gray-500 text-xs leading-relaxed">{{ feat.desc }}</p>
+                                <p v-if="feat.detail" class="text-gray-600 text-xs mt-1.5 font-mono border-t border-gray-800 pt-1.5">
+                                    {{ feat.detail }}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <p class="text-gray-600 text-xs mt-3 flex items-center gap-1.5">
+                    <i class="fa-solid fa-book-open text-blue-500/50"></i>
+                    Penjelasan lengkap dengan kode ada di
+                    <a href="https://github.com/mascahyo1/digit/blob/master/CONCEPTS.md"
+                        target="_blank" class="text-blue-400 hover:text-blue-300 transition-colors">CONCEPTS.md</a>
+                </p>
+            </div>
         </div>
     </AppLayout>
 </template>
@@ -158,6 +196,45 @@ const steps = [
         desc: 'Laravel Echo menerima event, Vue reactivity update progress bar real-time. Selesai 100% → tombol unduh file muncul.',
         icon: 'fa-solid fa-chart-line text-gray-400',
         highlight: false,
+    },
+];
+
+const features = [
+    {
+        title: 'Race-condition Safe',
+        badge: 'Download',
+        badgeClass: 'bg-blue-500/10 text-blue-400',
+        icon: 'fa-solid fa-shield-halved text-blue-400',
+        iconBg: 'bg-blue-500/10',
+        desc: 'Frontend subscribe ke WebSocket channel SEBELUM job di-dispatch. Menggunakan dua endpoint: /prepare (dapat ID) lalu /dispatch (jalankan job).',
+        detail: 'POST /prepare → subscribe Echo → konfirmasi → POST /dispatch',
+    },
+    {
+        title: 'WebSocket Fallback ke HTTP Polling',
+        badge: 'Resilient',
+        badgeClass: 'bg-orange-500/10 text-orange-400',
+        icon: 'fa-solid fa-rotate text-orange-400',
+        iconBg: 'bg-orange-500/10',
+        desc: 'Jika WebSocket tidak mengirim event > 12 detik, frontend otomatis beralih ke HTTP polling setiap 3 detik. Progress tidak pernah stuck. Balik ke WebSocket saat reconnect.',
+        detail: 'Silence 12s → poll /download/status/{id} dari cache → reconnect → stop polling',
+    },
+    {
+        title: 'Private Chat + Authentication',
+        badge: 'Chat',
+        badgeClass: 'bg-violet-500/10 text-violet-400',
+        icon: 'fa-solid fa-lock text-violet-400',
+        iconBg: 'bg-violet-500/10',
+        desc: 'Chat 1-on-1 dengan Reverb private channel. Hanya dua user yang terlibat bisa subscribe. Auth via Laravel session + /broadcasting/auth endpoint.',
+        detail: 'Echo.private("chat.{a}-{b}") → /broadcasting/auth → channel authorized',
+    },
+    {
+        title: 'Real-time Notification Badge',
+        badge: 'Live',
+        badgeClass: 'bg-red-500/10 text-red-400',
+        icon: 'fa-solid fa-bell text-red-400',
+        iconBg: 'bg-red-500/10',
+        desc: 'Badge merah di sidebar update real-time saat ada pesan private masuk — tanpa refresh halaman. Pakai channel notifikasi terpisah per user.',
+        detail: 'Echo.private("notifications.{userId}") → badge++ di AppLayout',
     },
 ];
 </script>

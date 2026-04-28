@@ -232,3 +232,130 @@ Output di terminal akan berwarna-warni dan berlabel:
 | **pusher-js** | Browser (JS) | Engine WebSocket, tahu protokol Pusher |
 | **laravel-echo** | Browser (JS) | Wrapper pusher-js, sintaks lebih mudah |
 | **concurrently** | Terminal (Dev) | Jalankan Vite + Reverb + Queue 1 perintah |
+
+---
+
+## 🔄 WebSocket Fallback ke HTTP Polling
+
+### Masalah: Progress Stuck
+
+Bayangkan download sedang berjalan di 60%. Tiba-tiba:
+- Reverb server restart
+- Koneksi internet client putus sebentar
+- Browser tab di-minimize terlalu lama
+
+Akibatnya: **tidak ada event WebSocket yang masuk** → progress bar **stuck forever** di 60%.
+
+### Solusi: Dual-mode Progress Tracking
+
+Project ini menggunakan strategi **dua jalur sekaligus**:
+
+```
+Job berjalan di background
+  │
+  ├─ 1. Broadcast via WebSocket (Reverb)  → cepat, real-time
+  └─ 2. Simpan ke Cache (database/redis)  → sebagai cadangan
+```
+
+Jika WebSocket hidup → pakai WebSocket.
+Jika WebSocket mati → baca dari cache via HTTP.
+
+### Implementasi
+
+**Backend — `ProcessDownload.php`:**
+```php
+private function updateProgress(int $progress, string $status, string $message): void
+{
+    // Simpan ke cache (TTL 2 jam) — untuk polling fallback
+    Cache::put("download_status_{$downloadId}", [
+        'progress' => $progress,
+        'status'   => $status,
+        'message'  => $message,
+    ], now()->addHours(2));
+
+    // Broadcast via WebSocket seperti biasa
+    event(new DownloadProgress(...));
+}
+```
+
+**Backend — `GET /download/status/{downloadId}`:**
+```php
+public function status(string $downloadId)
+{
+    $data = Cache::get("download_status_{$downloadId}");
+    return response()->json($data); // dibaca saat polling
+}
+```
+
+**Frontend — `Download.vue` (logika utama):**
+```js
+const SILENCE_TIMEOUT_MS  = 12_000; // 12 detik tanpa event → switch polling
+const POLLING_INTERVAL_MS =  3_000; // poll setiap 3 detik
+
+// Reset timer setiap kali event WebSocket masuk
+function resetSilenceTimer(downloadId) {
+    clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => {
+        // Tidak ada event 12 detik → switch ke polling
+        connectionMode.value = 'polling';
+        startPolling(downloadId);
+    }, SILENCE_TIMEOUT_MS);
+}
+
+// HTTP Polling fallback
+function startPolling(downloadId) {
+    pollingTimer = setInterval(async () => {
+        const { data } = await axios.get(`/download/status/${downloadId}`);
+        applyPayload(data); // update UI dari cache
+    }, POLLING_INTERVAL_MS);
+}
+```
+
+### Alur Lengkap Saat Koneksi Bermasalah
+
+```
+t=0s   Download mulai, subscribe Echo channel
+        → silence timer dimulai (12 detik)
+
+t=3s   Event WebSocket masuk (progress 30%)
+        → silence timer direset
+
+t=6s   Event WebSocket masuk (progress 60%)
+        → silence timer direset
+
+t=7s   ⚠️ Reverb tiba-tiba mati!
+
+t=19s  Silence timer habis (12 detik tanpa event)
+        → connectionMode = 'polling'
+        → mulai HTTP polling setiap 3 detik
+
+t=22s  GET /download/status/{id} → progress 70% dari cache ✅
+t=25s  GET /download/status/{id} → progress 80% dari cache ✅
+t=28s  GET /download/status/{id} → progress 90% dari cache ✅
+
+t=30s  Reverb nyala lagi, Echo reconnect
+        → connectionMode = 'websocket'
+        → polling berhenti otomatis
+
+t=32s  Event WebSocket masuk (progress 100%, completed) ✅
+```
+
+### Indikator di UI
+
+Saat proses berjalan, ada badge kecil di pojok progress card:
+
+| Badge | Arti |
+|-------|------|
+| 🟢 **WebSocket** | Menerima event real-time dari Reverb |
+| 🟠 **HTTP Polling** | WebSocket tidak responsif, fallback ke HTTP setiap 3 detik |
+
+### Trade-off
+
+| Aspek | WebSocket | HTTP Polling |
+|-------|-----------|-------------|
+| Kecepatan update | Instan (< 100ms) | Maksimal 3 detik delay |
+| Beban server | Rendah (1 koneksi) | Lebih tinggi (request per 3 detik) |
+| Keandalan | Bergantung pada koneksi WS | Selalu bisa jika HTTP ok |
+| Kompleksitas | Sederhana | Butuh endpoint + cache |
+
+> **Kesimpulan:** WebSocket untuk performa, polling untuk keandalan. Kombinasi keduanya menghasilkan sistem yang robust.
