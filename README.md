@@ -73,10 +73,17 @@ npm install
 cp .env.example .env
 php artisan key:generate
 
-# 4. Konfigurasi database di .env
-# DB_DATABASE=reverb
+# 4. Konfigurasi database & Reverb di .env
+# DB_DATABASE=laravel_reverb
 # DB_USERNAME=root
 # DB_PASSWORD=
+#
+# REVERB_APP_ID=reverb-local
+# REVERB_APP_KEY=<generate-random-key>
+# REVERB_APP_SECRET=<generate-random-secret>
+# REVERB_HOST=localhost
+# REVERB_PORT=8080
+# REVERB_SCHEME=http
 
 # 5. Jalankan migration
 php artisan migrate
