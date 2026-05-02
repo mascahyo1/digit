@@ -21,32 +21,65 @@ Project belajar full-stack modern dengan fitur **download file real-time progres
 
 - **Download Progress Real-time** — progress bar update tanpa refresh via WebSocket
 - **Race-condition Safe** — frontend subscribe channel *sebelum* job di-dispatch
+- **WebSocket Fallback + Heartbeat** — disconnect → HTTP polling otomatis; heartbeat deteksi job crash
 - **Background Queue** — generate file berjalan di background (database queue)
 - **Multi-format** — export CSV atau TXT dengan jumlah row 100–5.000
 - **Riwayat Download** — history download session
 
 ---
 
-## 🔄 Flow Arsitektur (Race-condition Safe)
+## 🔄 Cara Kerja Download Progress (Race-condition Safe)
+
+### Step 1 — Klik "Mulai Download"
+
+Frontend POST ke `/download/prepare` — backend generate UUID dan simpan metadata ke cache. Job **belum** dijalankan.
+
+### Step 2 — Subscribe WebSocket Channel
+
+Frontend subscribe ke channel `download.{id}` via Laravel Echo **sebelum** job di-dispatch. Ini mencegah race condition.
+
+### Step 3 — Tunggu Konfirmasi Reverb
+
+Menunggu event `pusher:subscription_succeeded` — konfirmasi dari Reverb bahwa channel sudah aktif dan siap menerima event.
+
+### Step 4 — Dispatch Job ke Queue
+
+Setelah channel aktif, frontend POST ke `/download/dispatch`. Backend ambil metadata dari cache lalu dispatch `ProcessDownload` job.
+
+### Step 5 — Broadcast Event per Step
+
+Job berjalan di background, broadcast `DownloadProgress` event setiap 10% selesai via Reverb WebSocket ke channel yang sudah aktif.
+
+### Step 6 — Progress Bar Terupdate
+
+Laravel Echo menerima event, Vue reactivity update progress bar real-time. Selesai 100% → tombol unduh file muncul.
+
+### Kunci Anti Race Condition
 
 ```
-1. User klik "Mulai Download"
-   └─ POST /download/prepare → backend generate UUID, simpan ke cache
-
-2. Frontend subscribe Echo channel "download.{id}"
-   └─ SEBELUM job di-dispatch (kunci utama!)
-
-3. Tunggu konfirmasi "pusher:subscription_succeeded" dari Reverb
-   └─ Memastikan WebSocket channel benar-benar aktif
-
-4. POST /download/dispatch → backend ambil metadata dari cache, dispatch job
-
-5. Queue worker proses job → broadcast DownloadProgress event tiap 10%
-
-6. Laravel Echo menerima event → Vue update progress bar real-time
-
-7. Selesai 100% → tombol unduh file muncul
+POST /prepare → subscribe Echo → konfirmasi → POST /dispatch
 ```
+
+Frontend subscribe channel **sebelum** job di-dispatch, jadi tidak ada event yang terlewat.
+
+---
+
+## 💓 WebSocket Fallback + Heartbeat
+
+### Fallback: WebSocket → HTTP Polling
+
+Jika WebSocket disconnect, frontend otomatis switch ke HTTP polling via `GET /download/status/{downloadId}` tiap 3 detik. Saat WebSocket reconnect, kembali ke WebSocket.
+
+### Heartbeat: Deteksi Job Crash
+
+Dua cache key terpisah:
+
+| Cache Key | Frekuensi Update | Fungsi |
+|-----------|-----------------|--------|
+| `download_status_{id}` | Jarang (tiap step 10%) | Progress & status download |
+| `download_heartbeat_{id}` | Sering (tiap N baris) | Tanda job masih hidup |
+
+Jika `download_status` menunjukkan "processing" tapi `download_heartbeat` tidak update dalam 2+ menit → job dianggap crash → status diubah ke "error". Heartbeat memastikan job lambat tidak salah dianggap crash.
 
 ---
 
@@ -137,9 +170,11 @@ resources/js/
 
 - **Laravel Reverb** — WebSocket server & broadcasting
 - **Laravel Echo** — subscribe channel dari frontend
-- **Queue & Jobs** — background processing
+- **Queue & Jobs** — background processing dengan heartbeat monitor
 - **Inertia.js** — SPA tanpa REST API
-- **Race Condition** — cara menghindarinya pada WebSocket
+- **Race Condition** — cara menghindarinya pada WebSocket (subscribe sebelum dispatch)
+- **WebSocket Fallback** — graceful degradation ke HTTP polling saat disconnect
+- **Heartbeat Pattern** — deteksi job crash via cache key terpisah (status vs heartbeat)
 
 > 💡 **Penjelasan lengkap** semua library (Reverb, Echo, pusher-js, concurrently) tersedia di **[CONCEPTS.md](./CONCEPTS.md)**
 
